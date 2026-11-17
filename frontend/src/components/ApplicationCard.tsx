@@ -20,7 +20,18 @@ export default function ApplicationCard({ app, onOpen, onMatch }: Props) {
       <div className="card-meta">
         <span>{app.location || app.source || "—"}</span>
         {app.match_score != null ? (
-          <span className={`score ${scoreTier(app.match_score)}`}>{Math.round(app.match_score)}%</span>
+          <button
+            type="button"
+            className={`score ${scoreTier(app.match_score)}`}
+            title="Voir le détail du matching"
+            aria-label={`Score d'adéquation ${Math.round(app.match_score)} %, voir le détail`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMatch();
+            }}
+          >
+            {Math.round(app.match_score)}%
+          </button>
         ) : (
           <button
             type="button"
