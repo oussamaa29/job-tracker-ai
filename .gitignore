@@ -12,3 +12,4 @@ frontend/.env
 # OS / editor
 .DS_Store
 *.log
+backend/.pytest_cache/
