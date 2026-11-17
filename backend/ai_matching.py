@@ -2,8 +2,10 @@ import json
 import logging
 
 import requests
+from pydantic import ValidationError
 
 from config import settings
+from schemas import MatchResult
 
 logger = logging.getLogger("ai_matching")
 
@@ -30,29 +32,33 @@ FORMAT DE SORTIE STRICT :
 """
 
 
-def _extract_json(text: str) -> dict:
+class AIResponseError(RuntimeError):
+    """Le modèle a répondu, mais pas avec un résultat exploitable."""
+
+
+# Schéma JSON transmis à Ollama (« structured outputs ») : la génération est contrainte
+# à ce format, au lieu d'espérer que le modèle respecte les consignes du prompt.
+RESPONSE_SCHEMA = MatchResult.model_json_schema()
+MAX_ATTEMPTS = 2
+
+
+def _strip_code_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
-        text = text.replace("```json", "").replace("```", "").strip()
+        text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    return text
+
+
+def parse_match_result(content: str) -> MatchResult:
+    """Valide la réponse du modèle. Lève AIResponseError si elle est inexploitable :
+    un score de 0 inventé serait enregistré comme un vrai résultat."""
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start, end = text.find("{"), text.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
-        return {
-            "match_score": 0,
-            "keywords_matched": [],
-            "keywords_missing": [],
-            "suggestions": [],
-            "reasoning": "Réponse IA illisible — nouvelle tentative recommandée.",
-        }
+        return MatchResult.model_validate_json(_strip_code_fence(content))
+    except ValidationError as e:
+        raise AIResponseError(f"Réponse IA invalide : {e.error_count()} erreur(s) de format") from e
 
 
-def compute_match(cv_text: str, job_description: str) -> dict:
+def _call_ollama(cv_text: str, job_description: str, seed: int) -> str:
     prompt = f"""CV DU CANDIDAT :
 {cv_text}
 
@@ -68,9 +74,10 @@ Analyse l'adéquation entre ce CV et cette offre selon les règles données."""
             {"role": "user", "content": prompt},
         ],
         "stream": False,
+        "format": RESPONSE_SCHEMA,
         "options": {
             "temperature": 0,
-            "seed": 42,
+            "seed": seed,
             "top_p": 1.0,
             "top_k": 1,
             "num_ctx": 4096,
@@ -82,16 +89,24 @@ Analyse l'adéquation entre ce CV et cette offre selon les règles données."""
             f"{settings.OLLAMA_URL}/api/chat", json=payload, timeout=settings.OLLAMA_TIMEOUT
         )
         resp.raise_for_status()
-        content = resp.json().get("message", {}).get("content", "")
     except requests.exceptions.ConnectionError:
         raise ConnectionError("Ollama n'est pas accessible. Démarre-le avec `ollama serve`.")
     except requests.exceptions.Timeout:
         raise TimeoutError("Ollama a mis trop de temps à répondre.")
+    except requests.exceptions.HTTPError as e:
+        raise AIResponseError(f"Ollama a renvoyé une erreur HTTP {e.response.status_code}") from e
+    return resp.json().get("message", {}).get("content", "")
 
-    result = _extract_json(content)
-    result.setdefault("match_score", 0)
-    result.setdefault("keywords_matched", [])
-    result.setdefault("keywords_missing", [])
-    result.setdefault("suggestions", [])
-    result.setdefault("reasoning", "")
-    return result
+
+def compute_match(cv_text: str, job_description: str) -> MatchResult:
+    """Compare un CV à une offre. Réessaie une fois avec une autre graine si la réponse
+    est invalide (avec temperature 0 et la même graine, le modèle répondrait pareil)."""
+    last_error: AIResponseError | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        content = _call_ollama(cv_text, job_description, seed=42 + attempt)
+        try:
+            return parse_match_result(content)
+        except AIResponseError as e:
+            logger.warning("Tentative %d : %s", attempt + 1, e)
+            last_error = e
+    raise last_error

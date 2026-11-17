@@ -11,7 +11,7 @@ from config import settings
 from database import Base, engine, get_db
 import models
 import schemas
-from ai_matching import compute_match
+from ai_matching import AIResponseError, compute_match
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("job-tracker")
@@ -50,7 +50,7 @@ def ai_health():
 # ---------------- Applications CRUD ----------------
 
 @app.get("/api/applications", response_model=List[schemas.ApplicationOut])
-def list_applications(status: Optional[str] = Query(None), db: Session = Depends(get_db)):
+def list_applications(status: Optional[schemas.Status] = Query(None), db: Session = Depends(get_db)):
     q = db.query(models.Application)
     if status:
         q = q.filter(models.Application.status == status)
@@ -68,7 +68,7 @@ def create_application(payload: schemas.ApplicationCreate, db: Session = Depends
 
 @app.get("/api/applications/{app_id}", response_model=schemas.ApplicationOut)
 def get_application(app_id: int, db: Session = Depends(get_db)):
-    app_obj = db.query(models.Application).get(app_id)
+    app_obj = db.get(models.Application, app_id)
     if not app_obj:
         raise HTTPException(404, "Candidature introuvable")
     return app_obj
@@ -76,7 +76,7 @@ def get_application(app_id: int, db: Session = Depends(get_db)):
 
 @app.put("/api/applications/{app_id}", response_model=schemas.ApplicationOut)
 def update_application(app_id: int, payload: schemas.ApplicationUpdate, db: Session = Depends(get_db)):
-    app_obj = db.query(models.Application).get(app_id)
+    app_obj = db.get(models.Application, app_id)
     if not app_obj:
         raise HTTPException(404, "Candidature introuvable")
     for field, value in payload.model_dump(exclude_unset=True).items():
@@ -88,7 +88,7 @@ def update_application(app_id: int, payload: schemas.ApplicationUpdate, db: Sess
 
 @app.delete("/api/applications/{app_id}", status_code=204)
 def delete_application(app_id: int, db: Session = Depends(get_db)):
-    app_obj = db.query(models.Application).get(app_id)
+    app_obj = db.get(models.Application, app_id)
     if not app_obj:
         raise HTTPException(404, "Candidature introuvable")
     db.delete(app_obj)
@@ -100,7 +100,7 @@ def delete_application(app_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/applications/{app_id}/match", response_model=schemas.ApplicationOut)
 def match_application(app_id: int, payload: schemas.MatchRequest, db: Session = Depends(get_db)):
-    app_obj = db.query(models.Application).get(app_id)
+    app_obj = db.get(models.Application, app_id)
     if not app_obj:
         raise HTTPException(404, "Candidature introuvable")
 
@@ -117,13 +117,16 @@ def match_application(app_id: int, payload: schemas.MatchRequest, db: Session = 
         result = compute_match(cv_text, job_description)
     except (ConnectionError, TimeoutError) as e:
         raise HTTPException(503, str(e))
+    except AIResponseError as e:
+        # Rien n'est enregistré : l'ancien résultat (s'il existe) reste affiché
+        raise HTTPException(502, f"{e}. Relance le matching.")
 
     app_obj.job_description = job_description
-    app_obj.match_score = result["match_score"]
-    app_obj.match_keywords_matched = json.dumps(result["keywords_matched"], ensure_ascii=False)
-    app_obj.match_keywords_missing = json.dumps(result["keywords_missing"], ensure_ascii=False)
-    app_obj.match_suggestions = json.dumps(result["suggestions"], ensure_ascii=False)
-    app_obj.match_reasoning = result["reasoning"]
+    app_obj.match_score = result.match_score
+    app_obj.match_keywords_matched = json.dumps(result.keywords_matched, ensure_ascii=False)
+    app_obj.match_keywords_missing = json.dumps(result.keywords_missing, ensure_ascii=False)
+    app_obj.match_suggestions = json.dumps(result.suggestions, ensure_ascii=False)
+    app_obj.match_reasoning = result.reasoning
     db.commit()
     db.refresh(app_obj)
     return app_obj
