@@ -46,7 +46,10 @@
 .card-meta{display:flex; justify-content:space-between; align-items:center; font-size:.78rem; color:var(--ink-soft);}
 .score{
   font-family:var(--font-mono); font-weight:700; font-size:.78rem; padding:2px 8px; border-radius:999px;
+  border:none; cursor:pointer;
 }
+.score:hover{filter:brightness(.95);}
+.score:focus-visible{outline:2px solid var(--accent-ink); outline-offset:2px;}
 .score.high{background:var(--accent-soft); color:var(--accent-ink);}
 .score.mid{background:var(--warn-soft); color:var(--warn);}
 .score.low{background:var(--danger-soft); color:var(--danger);}

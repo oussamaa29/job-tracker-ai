@@ -1,15 +1,16 @@
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Literal, Optional, List, get_args
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-STATUSES = ["to_apply", "applied", "phone_screen", "interview", "offer", "rejected", "withdrawn"]
+Status = Literal["to_apply", "applied", "phone_screen", "interview", "offer", "rejected", "withdrawn"]
+STATUSES = list(get_args(Status))
 
 
 class ApplicationBase(BaseModel):
     company: str
     position: str
-    status: str = "to_apply"
+    status: Status = "to_apply"
     job_url: Optional[str] = None
     location: Optional[str] = None
     salary_range: Optional[str] = None
@@ -26,7 +27,7 @@ class ApplicationCreate(ApplicationBase):
 class ApplicationUpdate(BaseModel):
     company: Optional[str] = None
     position: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[Status] = None
     job_url: Optional[str] = None
     location: Optional[str] = None
     salary_range: Optional[str] = None
@@ -64,7 +65,7 @@ class MatchRequest(BaseModel):
 
 
 class MatchResult(BaseModel):
-    match_score: float
+    match_score: float = Field(ge=0, le=100)
     keywords_matched: List[str]
     keywords_missing: List[str]
     suggestions: List[str]
